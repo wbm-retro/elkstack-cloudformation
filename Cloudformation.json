@@ -1,0 +1,388 @@
+{
+    "AWSTemplateFormatVersion": "2010-09-09",
+
+    "Description": "ELK Stack - Elasticsearch, Logstash, Kibana",
+
+    "Parameters": {
+
+        "KeyName": {
+            "Default": "Test-DevOps",
+            "Description": "ssh key name",
+            "Type": "String"
+        },
+        "Stage": {
+            "Description": "Stage",
+            "Type": "String",
+            "Default": "PROD",
+            "AllowedValues": [ "PROD", "CODE" ],
+            "ConstraintDescription": "must be a valid stage eg. PROD, CODE"
+        },
+        "LogstashCapacity": {
+            "Description": "Logstash Autoscale Size",
+            "Type": "Number",
+            "Default": "1",
+            "MinValue": 1,
+            "MaxValue": 4
+        },
+        "LogstashInstanceType": {
+            "Description": "Logstash EC2 instance type",
+            "Type": "String",
+            "Default": "t2.small",
+            "AllowedValues": [
+                "t1.micro",
+                "t2.small",
+                "t2.medium",
+                "t2.large"
+
+            ],
+            "ConstraintDescription": "must be a valid EC2 instance type"
+        },
+         "ElasticsearchCapacity": {
+            "Description": "Elasticsearch Autoscale Size",
+            "Type": "Number",
+            "Default": 1,
+            "MinValue": 1,
+            "MaxValue": 4
+        },
+        "ElasticsearchInstanceType": {
+            "Description": "Elasticsearch EC2 instance type",
+            "Type": "String",
+            "Default": "t2.medium",
+            "AllowedValues": [
+                "t1.micro",
+                "t2.small",
+                "t2.medium",
+                "t2.large"
+            ],
+            "ConstraintDescription": "must be a valid EC2 instance type"
+        }
+    },
+
+    "Resources": {
+
+        "LogstashLoadBalancer": {
+            "Type": "AWS::ElasticLoadBalancing::LoadBalancer",
+            "Properties": {
+                "AvailabilityZones": { "Fn::GetAZs": "" },
+                "CrossZone": true,
+                "Listeners": [
+                    {
+                        "Protocol": "TCP",
+                        "LoadBalancerPort": "6379",
+                        "InstancePort": "6379"
+                    },
+                    {
+                        "Protocol": "HTTP",
+                        "LoadBalancerPort": "80",
+                        "InstancePort": "80"
+                    }
+                ],
+                "HealthCheck": {
+                    "Target": "HTTP:80/",
+                    "Timeout": "10",
+                    "Interval": "20",
+                    "UnhealthyThreshold": "10",
+                    "HealthyThreshold": "2"
+                }
+            }
+
+        },
+
+        "LogstashAutoscalingGroup": {
+            "Type": "AWS::AutoScaling::AutoScalingGroup",
+            "Properties": {
+                "AvailabilityZones": { "Fn::GetAZs": "" },
+                "LaunchConfigurationName": { "Ref": "LogstashLaunchConfig" },
+                "MinSize": "1",
+                "MaxSize": "4",
+                "DesiredCapacity": { "Ref": "LogstashCapacity" },
+                "HealthCheckType": "ELB",
+                "HealthCheckGracePeriod": 300,
+                "LoadBalancerNames": [ { "Ref": "LogstashLoadBalancer" } ],
+                "Tags": [
+                    {
+                        "Key": "Stage",
+                        "Value": { "Ref": "Stage" },
+                        "PropagateAtLaunch": "true"
+                    },
+                    {
+                        "Key": "Stack",
+                        "Value": { "Ref": "AWS::StackName" },
+                        "PropagateAtLaunch": "true"
+                    },
+                    {
+                        "Key": "App",
+                        "Value": "logstash",
+                        "PropagateAtLaunch": "true"
+                    },
+                    {
+                        "Key": "Name",
+                        "Value": { "Fn::Join":[ "-", [ { "Ref": "AWS::StackName" }, "logstash" ] ] },
+                        "PropagateAtLaunch": "true"
+                    }
+                ]
+            }
+        },
+
+        "LogstashLaunchConfig": {
+            "Type": "AWS::AutoScaling::LaunchConfiguration",
+            "Properties": {
+                "ImageId": "ami-c39604b0",
+                "SecurityGroups": [ { "Ref": "LogstashSecurityGroup" } ],
+                "InstanceType": { "Ref": "LogstashInstanceType" },
+                "KeyName": { "Ref": "KeyName" },
+                "IamInstanceProfile": { "Ref": "InstanceProfile" },
+                "UserData": {
+                    "Fn::Base64": {
+                        "Fn::Join": [ "\n", [
+                            "#!/bin/bash -v",
+                            "curl -L -O https://download.elastic.co/logstash/logstash/packages/centos/logstash-2.3.2-1.noarch.rpm",
+                            "rpm -i logstash-2.3.2-1.noarch.rpm",
+                            "yum -y install nginx",
+                            "/etc/init.d/nginx restart",
+
+                            "wget -O /etc/logstash/conf.d/logstash-indexer.conf https://bitbucket.org/wbmgeneral/elkstack-cloudformation/raw/master/logstash-indexer.conf",
+                            
+                            { "Fn::Join": [ "", [ "sed -i",
+                                " -e 's,@@ELASTICSEARCH,", { "Fn::GetAtt": [ "ElasticsearchLoadBalancer", "DNSName" ]}, ",g'",
+                                " /etc/logstash/conf.d/logstash-indexer.conf" ] ] },
+
+                            "mkdir -p /opt/logstash/patterns",
+                            "wget -O /opt/logstash/patterns/nginx https://bitbucket.org/wbmgeneral/elkstack-cloudformation/raw/master/nginx-pattern",
+                            "/etc/init.d/logstash restart"
+
+                        ] ]
+                    }
+                }
+            }
+        },
+
+        "LogstashSecurityGroup": {
+            "Type": "AWS::EC2::SecurityGroup",
+            "Properties": {
+                "GroupDescription": "SSH, Elasticsearch, and HTTP",
+                "SecurityGroupIngress": [
+                    {
+                        "IpProtocol": "tcp",
+                        "FromPort": "6379",
+                        "ToPort": "6379",
+                        "CidrIp": "0.0.0.0/0"
+                    },
+                    {
+                        "IpProtocol": "tcp",
+                        "FromPort": "22",
+                        "ToPort": "22",
+                        "CidrIp": "0.0.0.0/0"
+                    },
+                    {
+                        "IpProtocol": "tcp",
+                        "FromPort": "80",
+                        "ToPort": "80",
+                        "CidrIp": "0.0.0.0/0"
+                    }
+                ]
+            }
+        },
+
+        "Role": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "Path": "/",
+                "AssumeRolePolicyDocument": {
+                    "Statement": [
+                        {
+                            "Action": "sts:AssumeRole",
+                            "Effect": "Allow",
+                            "Principal": {
+                                "Service": [ "ec2.amazonaws.com" ]
+                            }
+                        }
+                    ]
+                },
+                "Policies": [
+                    {
+                        "PolicyName":"LoggerServerPolicy",
+                        "PolicyDocument": {
+                            "Version" : "2012-10-17",
+                            "Statement": [
+                                {
+                                    "Action": "ec2:DescribeInstances",
+                                    "Effect": "Allow",
+                                    "Resource": "*"
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        },
+        "InstanceProfile": {
+            "Type": "AWS::IAM::InstanceProfile",
+            "Properties": {
+                "Path": "/",
+                "Roles": [ { "Ref": "Role" } ]
+            }
+        },
+
+        "ElasticsearchLoadBalancer": {
+            "Type": "AWS::ElasticLoadBalancing::LoadBalancer",
+            "Properties": {
+                "AvailabilityZones": { "Fn::GetAZs": "" },
+                "CrossZone": true,
+                "Listeners": [
+                    {
+                        "Protocol": "HTTP",
+                        "LoadBalancerPort": "80",
+                        "InstancePort": "80"
+                    },
+                    {
+                        "Protocol": "HTTP",
+                        "LoadBalancerPort": "9200",
+                        "InstancePort": "9200"
+                    }
+                ],
+                "HealthCheck": {
+                    "Target": "HTTP:9200/",
+                    "Timeout": "10",
+                    "Interval": "20",
+                    "UnhealthyThreshold": "10",
+                    "HealthyThreshold": "2"
+                }
+            }
+        },
+
+        "ElasticsearchAutoscalingGroup": {
+            "Type": "AWS::AutoScaling::AutoScalingGroup",
+            "Properties": {
+                "AvailabilityZones": { "Fn::GetAZs": "" },
+                "LaunchConfigurationName": { "Ref": "ElasticsearchLaunchConfig" },
+                "MinSize": "1",
+                "MaxSize": "4",
+                "DesiredCapacity": { "Ref": "ElasticsearchCapacity" },
+                "HealthCheckType": "ELB",
+                "HealthCheckGracePeriod": 300,
+                "LoadBalancerNames": [ { "Ref": "ElasticsearchLoadBalancer" } ],
+                "Tags": [
+                    {
+                        "Key": "Stage",
+                        "Value": { "Ref": "Stage" },
+                        "PropagateAtLaunch": "true"
+                    },
+                    {
+                        "Key": "Stack",
+                        "Value": { "Ref": "AWS::StackName" },
+                        "PropagateAtLaunch": "true"
+                    },
+                    { 
+                        "Key": "App",
+                        "Value": "elasticsearch",
+                        "PropagateAtLaunch": "true"
+                    },
+                    {
+                        "Key": "Name",
+                        "Value": { "Fn::Join":[ "-", [ { "Ref": "AWS::StackName" }, "elasticsearch" ] ] },
+                        "PropagateAtLaunch": "true"
+                    }
+                ]
+            }
+        },
+
+        "ElasticsearchLaunchConfig": {
+            "Type": "AWS::AutoScaling::LaunchConfiguration",
+            "Properties": {
+                "ImageId": "ami-c39604b0",
+                "SecurityGroups": [ { "Ref": "ElasticsearchSecurityGroup" } ],
+                "InstanceType": { "Ref": "ElasticsearchInstanceType" },
+                "KeyName": { "Ref": "KeyName" },
+                "IamInstanceProfile": { "Ref": "InstanceProfile" },
+
+                "UserData": {
+                    "Fn::Base64": {
+                        "Fn::Join": [ "\n", [
+                            "#!/bin/bash -v",
+
+                            "wget https://download.elastic.co/elasticsearch/release/org/elasticsearch/distribution/rpm/elasticsearch/2.3.3/elasticsearch-2.3.3.rpm",
+                            "rpm -i elasticsearch-2.3.3.rpm",
+                            "echo \"network.host: 0.0.0.0\" >> /etc/elasticsearch/elasticsearch.yml",
+                            "/etc/init.d/elasticsearch restart",
+                            
+                            "yum -y install nginx",
+                            "/etc/init.d/nginx restart",
+
+                            "cd /usr/share/nginx/html",
+                            "wget https://download.elastic.co/kibana/kibana/kibana-4.5.1-linux-x64.tar.gz",
+                            "tar -xzf kibana-4.5.1-linux-x64.tar.gz",
+
+                            "mkdir -p /opt/kibana",
+                            "cp -r kibana-4.5.1-linux-x64/* /opt/kibana",
+                            "cd /etc/init.d && sudo wget https://bitbucket.org/wbmgeneral/elkstack-cloudformation/raw/master/kibana.sh -O kibana4",
+                            "chmod +x /etc/init.d/kibana4",
+                            "/etc/init.d/kibana4 restart",
+                            "wget -O /etc/nginx/nginx.conf https://bitbucket.org/wbmgeneral/elkstack-cloudformation/raw/master/nginx.conf",
+                            "wget -O /etc/nginx/conf.d/kibana.conf https://bitbucket.org/wbmgeneral/elkstack-cloudformation/raw/master/nginx-kibana.conf",
+                            "/etc/init.d/nginx restart",
+                            "cd ~",
+                            "curl -L -O https://download.elastic.co/beats/dashboards/beats-dashboards-1.2.3.zip",
+                            "yum -y install unzip",
+                            "unzip beats-dashboards-*.zip",
+                            "cd beats-dashboards-*",
+                            "./load.sh",
+                            "cd ~",
+                            "curl -O https://gist.githubusercontent.com/thisismitch/3429023e8438cc25b86c/raw/d8c479e2a1adcea8b1fe86570e42abab0f10f364/filebeat-index-template.json",
+                            "curl -XPUT 'http://localhost:9200/_template/filebeat?pretty' -d@filebeat-index-template.json"
+                        ] ]
+                    }
+                }
+            }
+        },
+
+        "ElasticsearchSecurityGroup": {
+            "Type": "AWS::EC2::SecurityGroup",
+            "Properties": {
+                "GroupDescription": "SSH, Elasticsearch, and HTTP",
+                "SecurityGroupIngress": [
+                    {
+                        "IpProtocol": "tcp",
+                        "FromPort": "80",
+                        "ToPort": "80",
+                        "CidrIp": "0.0.0.0/0"
+                    },
+                    {
+                        "IpProtocol": "tcp",
+                        "FromPort": "9200",
+                        "ToPort": "9200",
+                        "CidrIp": "0.0.0.0/0"
+                    },
+                    {
+                        "IpProtocol": "tcp",
+                        "FromPort": "22",
+                        "ToPort": "22",
+                        "CidrIp": "0.0.0.0/0"
+                    }
+                ]
+            }
+        },
+        "ElasticsearchSecurityGroupIngress": {
+            "Type": "AWS::EC2::SecurityGroupIngress",
+            "Properties": {
+                "GroupName": { "Ref": "ElasticsearchSecurityGroup" },
+                "IpProtocol": "tcp",
+                "FromPort": "9200",
+                "ToPort": "9200",
+                "SourceSecurityGroupName": { "Ref": "ElasticsearchSecurityGroup"}
+            }
+        }
+    },
+
+    "Outputs": {
+        "LogstashEndpoint": {
+            "Value": { "Fn::Join": ["", [ { "Fn::GetAtt": [ "LogstashLoadBalancer", "DNSName" ]}, ":6379"]] },
+            "Description": "Logging endpoint for Logstash TCP input"
+        },
+        "KibanaURL": {
+            "Value": { "Fn::Join": ["", ["http://", { "Fn::GetAtt": [ "ElasticsearchLoadBalancer", "DNSName" ]}]] },
+            "Description": "URL for the Kibana Dashboard"
+        }
+    }
+}
+
