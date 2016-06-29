@@ -79,7 +79,15 @@
             "Default": "",
             "Description": "Ip address to give access to Kibana",
             "Type": "String"
-        }
+        },
+        "VpcId": {
+            "Description": "ID of the VPC onto which to launch the application eg. vpc-1234abcd",
+            "Type": "AWS::EC2::VPC::Id"
+        },
+        "VpcSubnets" : {
+            "Description": "Subnets to use in VPC eg. subnet-abcd1234",
+            "Type": "List<AWS::EC2::Subnet::Id>"
+        } 
         
     },
 
@@ -88,7 +96,6 @@
         "LogstashLoadBalancer": {
             "Type": "AWS::ElasticLoadBalancing::LoadBalancer",
             "Properties": {
-                "AvailabilityZones": { "Fn::GetAZs": "" },
                 "CrossZone": true,
                 "Listeners": [
                     {
@@ -108,15 +115,50 @@
                     "Interval": "20",
                     "UnhealthyThreshold": "10",
                     "HealthyThreshold": "2"
-                }
+                },
+                "Subnets": { "Ref": "VpcSubnets" },
+                "SecurityGroups": [
+                    { "Ref": "LogstashLoadBalancerSecurityGroup" }
+                ]
             }
 
+        },
+
+        "LogstashLoadBalancerSecurityGroup": {
+            "Type": "AWS::EC2::SecurityGroup",
+            "Properties": {
+                "VpcId": { "Ref": "VpcId" },
+                "GroupDescription": "Open up HTTP access to load balancer",
+                "SecurityGroupIngress": [
+                    {
+                        "IpProtocol": "tcp",
+                        "FromPort": "6379",
+                        "ToPort": "6379",
+                        "CidrIp": "0.0.0.0/0"
+                    }
+                ],
+                "SecurityGroupEgress": [
+                    {
+                        "IpProtocol": "tcp",
+                        "FromPort": "80",
+                        "ToPort": "80",
+                        "CidrIp": "0.0.0.0/0"
+                    },
+                    {
+                        "IpProtocol": "tcp",
+                        "FromPort": "6379",
+                        "ToPort": "6379",
+                        "CidrIp": "0.0.0.0/0"
+                    }
+                ]
+            }
         },
 
         "LogstashAutoscalingGroup": {
             "Type": "AWS::AutoScaling::AutoScalingGroup",
             "Properties": {
                 "AvailabilityZones": { "Fn::GetAZs": "" },
+                "VPCZoneIdentifier": { "Ref": "VpcSubnets" },
                 "LaunchConfigurationName": { "Ref": "LogstashLaunchConfig" },
                 "MinSize": "1",
                 "MaxSize": "4",
@@ -153,7 +195,7 @@
             "Type": "AWS::AutoScaling::LaunchConfiguration",
             "Properties": {
                 "ImageId": "ami-c39604b0",
-                "SecurityGroups": [ { "Ref": "LogstashSecurityGroup" } ],
+                "SecurityGroups": [ { "Ref": "LogstashSecurityGroup" } , { "Ref": "LogstashLoadBalancerSecurityGroup" } ],
                 "InstanceType": { "Ref": "LogstashInstanceType" },
                 "KeyName": { "Ref": "KeyName" },
                 "IamInstanceProfile": { "Ref": "InstanceProfile" },
@@ -191,12 +233,13 @@
             "Type": "AWS::EC2::SecurityGroup",
             "Properties": {
                 "GroupDescription": "SSH, Elasticsearch, and HTTP",
+                "VpcId": { "Ref": "VpcId" },
                 "SecurityGroupIngress": [
                     {
                         "IpProtocol": "tcp",
                         "FromPort": "6379",
                         "ToPort": "6379",
-                        "CidrIp": "0.0.0.0/0"
+                        "SourceSecurityGroupId": { "Ref": "LogstashLoadBalancerSecurityGroup" }
                     },
                     {
                         "IpProtocol": "tcp",
@@ -208,7 +251,7 @@
                         "IpProtocol": "tcp",
                         "FromPort": "80",
                         "ToPort": "80",
-                        "CidrIp": "0.0.0.0/0"
+                        "SourceSecurityGroupId": { "Ref": "LogstashLoadBalancerSecurityGroup" }
                     }
                 ]
             }
