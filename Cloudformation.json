@@ -221,7 +221,10 @@
                             "mkdir -p /opt/logstash/patterns",
                             "wget -O /opt/logstash/patterns/nginx https://bitbucket.org/wbmgeneral/elkstack-cloudformation/raw/master/nginx-pattern",
                             "/opt/logstash/bin/logstash-plugin install logstash-output-amazon_es",
-                            "/etc/init.d/logstash restart"
+                            "/etc/init.d/logstash restart",
+                            
+                            "wget -O /etc/logstash/GeoLiteCity.dat.gz http://geolite.maxmind.com/download/geoip/database/GeoLiteCity.dat.gz",
+                            "gunzip /etc/logstash/GeoLiteCity.dat.gz"
 
                         ] ]
                     }
