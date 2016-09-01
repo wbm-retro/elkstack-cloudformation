@@ -328,6 +328,7 @@
                     "VolumeSize": 20,
                     "VolumeType": "gp2"
                 },
+                "Elasticsearch-Version": "2.3",
                 "SnapshotOptions": {
                     "AutomatedSnapshotStartHour": "0"
                 },
